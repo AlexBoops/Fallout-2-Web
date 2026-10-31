@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <meta name="description" content="Play Fallout 2 in your browser. Drag and drop your game files to start.">
+  <meta name="description" content="Play Fallout 2 directly in your browser via GitHub Pages.">
   <meta name="theme-color" content="#050d05">
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>☢</text></svg>">
@@ -27,12 +27,10 @@
       touch-action: none;
     }
     
-    /* Hide system cursor globally when game is active */
     body.game-running, html.game-running, body.game-running * {
       cursor: none !important;
     }
     
-    /* CRT Scanline overlay — uses will-change for GPU compositing */
     body::after {
       content: " ";
       display: block;
@@ -51,7 +49,6 @@
       image-rendering: pixelated;
       image-rendering: crisp-edges;
       cursor: none;
-      /* GPU acceleration for canvas element */
       will-change: contents;
       transform: translateZ(0);
     }
@@ -94,9 +91,7 @@
       text-shadow: 0 0 5px #33ff33;
     }
 
-    /* Upload progress bar */
     #upload-progress {
-      display: none;
       width: 100%;
       height: 20px;
       background: rgba(51, 255, 51, 0.1);
@@ -113,34 +108,6 @@
       box-shadow: 0 0 8px #33ff33;
     }
 
-    /* Drag and Drop Zone */
-    #upload-zone {
-      border: 2px dashed #33ff33;
-      padding: 40px 20px;
-      text-align: center;
-      cursor: pointer;
-      background: rgba(51, 255, 51, 0.05);
-      transition: all 0.3s ease;
-      margin-bottom: 20px;
-    }
-    #upload-zone:hover, #upload-zone.dragover {
-      background: rgba(51, 255, 51, 0.15);
-      box-shadow: 0 0 15px rgba(51, 255, 51, 0.2);
-    }
-    #upload-zone p {
-      font-size: 16px;
-      font-weight: bold;
-      margin-bottom: 10px;
-    }
-    #upload-zone span {
-      font-size: 12px;
-      color: #22aa22;
-    }
-
-    /* Hidden File Input */
-    #file-input { display: none; }
-
-    /* Launch Button */
     .btn {
       display: none;
       width: 100%;
@@ -166,7 +133,6 @@
       box-shadow: none;
     }
 
-    /* Reset Button */
     .btn-reset {
       display: none;
       width: 100%;
@@ -188,7 +154,6 @@
       box-shadow: 0 0 15px rgba(255, 51, 51, 0.5);
     }
 
-    /* Fullscreen re-entry banner */
     #fs-banner {
       display: none;
       position: fixed; bottom: 0; left: 0; width: 100%;
@@ -202,7 +167,6 @@
     #fs-banner:hover { background: rgba(51, 255, 51, 0.25); }
     @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 
-    /* Loading overlay during game boot */
     #loading-overlay {
       display: none;
       position: fixed; top: 0; left: 0; width: 100%; height: 100%;
@@ -232,16 +196,8 @@
       
       <div id="upload-progress"><div id="upload-progress-bar"></div></div>
 
-      <div id="upload-zone" onclick="document.getElementById('file-input').click()">
-        <p>DRAG & DROP DAT FILES HERE</p>
-        <span>or click to browse your PC</span>
-        <br><br>
-        <span style="color:#ffaa00">Required: MASTER.DAT & CRITTER.DAT</span>
-      </div>
-      <input type="file" id="file-input" multiple accept=".dat">
-
       <button id="launch-btn" class="btn" onclick="launchGame()">Initialize Game Runtime</button>
-      <button id="reset-btn" class="btn-reset" onclick="resetFiles()">Reset Stored Game Files</button>
+      <button id="reset-btn" class="btn-reset" onclick="resetFiles()">Reset Stored Game Cache</button>
     </div>
   </div>
 
@@ -254,21 +210,22 @@
   <canvas class="emscripten" id="canvas" oncontextmenu="event.preventDefault()" tabindex="1"></canvas>
 
   <script type='text/javascript'>
-    // ─── PWA Service Worker Registration ───
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
         navigator.serviceWorker.register('./sw.js').then((registration) => {
-          console.log('ServiceWorker registered with scope:', registration.scope);
+          console.log('ServiceWorker registered:', registration.scope);
         }).catch((error) => {
           console.error('ServiceWorker registration failed:', error);
         });
       });
     }
 
-    // ─── Performance: Single DB connection pool ───
     const DB_NAME = 'Fallout2WebDB';
     const STORE_NAME = 'files';
     let _dbInstance = null;
+
+    // Use relative path directly from your GitHub Pages web root
+    const LOCAL_ASSETS_DIR = "./Assets";
 
     async function openDB() {
       if (_dbInstance) return _dbInstance;
@@ -282,7 +239,6 @@
         };
         request.onsuccess = (e) => {
           _dbInstance = e.target.result;
-          // Reset pool on unexpected close
           _dbInstance.onclose = () => { _dbInstance = null; };
           resolve(_dbInstance);
         };
@@ -312,83 +268,61 @@
       });
     }
 
-    // ─── DOM Cache (avoid repeated lookups) ───
-    const uploadZone = document.getElementById('upload-zone');
-    const fileInput = document.getElementById('file-input');
     const statusText = document.getElementById('status');
     const launchBtn = document.getElementById('launch-btn');
     const resetBtn = document.getElementById('reset-btn');
     const canvasEl = document.getElementById('canvas');
     const fsBanner = document.getElementById('fs-banner');
-    const loadingOverlay = document.getElementById('loading-overlay');
-    const loadingText = document.getElementById('loading-text');
     const uploadProgress = document.getElementById('upload-progress');
     const uploadProgressBar = document.getElementById('upload-progress-bar');
 
-    // ─── Drag & Drop handlers ───
-    uploadZone.addEventListener('dragenter', (e) => { e.preventDefault(); uploadZone.classList.add('dragover'); }, false);
-    uploadZone.addEventListener('dragover', (e) => { e.preventDefault(); uploadZone.classList.add('dragover'); }, false);
-    uploadZone.addEventListener('dragleave', (e) => { e.preventDefault(); uploadZone.classList.remove('dragover'); }, false);
-    uploadZone.addEventListener('drop', (e) => {
-      e.preventDefault();
-      uploadZone.classList.remove('dragover');
-      handleFiles(e.dataTransfer.files);
-    }, false);
-    fileInput.addEventListener('change', () => handleFiles(fileInput.files));
-
-    // ─── File validation & upload with progress ───
-    async function handleFiles(files) {
-      let masterFile = null;
-      let critterFile = null;
-
-      for (const file of files) {
-        const name = file.name.toLowerCase();
-        if (name === 'master.dat') masterFile = file;
-        if (name === 'critter.dat') critterFile = file;
-      }
-
-      if (!masterFile && !critterFile) {
-        statusText.innerHTML = "<span style='color:red;'>Error: No valid game files detected. Please drop MASTER.DAT or CRITTER.DAT.</span>";
-        return;
-      }
-
-      // Validate file sizes (MASTER.DAT ~163MB, CRITTER.DAT ~37MB)
-      if (masterFile && masterFile.size < 1000000) {
-        statusText.innerHTML = "<span style='color:red;'>Error: MASTER.DAT seems too small. Please use the original game file.</span>";
-        return;
-      }
-      if (critterFile && critterFile.size < 500000) {
-        statusText.innerHTML = "<span style='color:red;'>Error: CRITTER.DAT seems too small. Please use the original game file.</span>";
-        return;
-      }
-
-      uploadProgress.style.display = 'block';
-      const totalFiles = (masterFile ? 1 : 0) + (critterFile ? 1 : 0);
-      let done = 0;
-
-      try {
-        if (masterFile) {
-          statusText.innerText = 'Saving MASTER.DAT to browser storage...';
-          uploadProgressBar.style.width = '10%';
-          await saveFile('master.dat', masterFile);
-          done++;
-          uploadProgressBar.style.width = Math.round((done / totalFiles) * 100) + '%';
+    async function fetchWithRetry(url, retries = 5, delayMs = 3000) {
+      for (let attempt = 1; attempt <= retries; attempt++) {
+        try {
+          const res = await fetch(url);
+          if (res.ok) {
+            const buf = await res.arrayBuffer();
+            if (buf.byteLength > 0) return buf;
+          }
+          console.warn(`[Attempt ${attempt}/${retries}] HTTP ${res ? res.status : 'Error'} for ${url}`);
+        } catch (err) {
+          console.warn(`[Attempt ${attempt}/${retries}] Network error fetching ${url}`);
         }
-        if (critterFile) {
-          statusText.innerText = 'Saving CRITTER.DAT to browser storage...';
-          uploadProgressBar.style.width = (done > 0 ? '60%' : '10%');
-          await saveFile('critter.dat', critterFile);
-          done++;
-          uploadProgressBar.style.width = '100%';
+
+        if (attempt < retries) {
+          statusText.innerText = `Retrying file stream in 3s... (${attempt}/${retries})`;
+          await new Promise(r => setTimeout(r, delayMs));
         }
-        statusText.innerText = 'Files saved successfully!';
-        setTimeout(() => { uploadProgress.style.display = 'none'; }, 800);
-        checkFiles();
-      } catch (err) {
-        console.error(err);
-        uploadProgress.style.display = 'none';
-        statusText.innerHTML = "<span style='color:red;'>Storage failed. Browser storage might be full or restricted.</span>";
       }
+      throw new Error(`Failed to fetch ${url} after ${retries} attempts.`);
+    }
+
+    // Direct local 3-digit padded chunk assembly (.part001 to .part017)
+    async function downloadAndAssemble(baseName, totalParts, startPct, endPct) {
+      const buffers = [];
+      let totalLength = 0;
+
+      for (let i = 1; i <= totalParts; i++) {
+        const partNum = String(i).padStart(3, '0');
+        const chunkUrl = `${LOCAL_ASSETS_DIR}/${baseName}.part${partNum}`;
+        
+        const currentPct = Math.round(startPct + ((i - 1) / totalParts) * (endPct - startPct));
+        statusText.innerText = `LOADING FROM HOST: ${baseName} (${i}/${totalParts})...`;
+        uploadProgressBar.style.width = currentPct + '%';
+
+        const buf = await fetchWithRetry(chunkUrl);
+        buffers.push(buf);
+        totalLength += buf.byteLength;
+      }
+
+      const combined = new Uint8Array(totalLength);
+      let offset = 0;
+      for (const buf of buffers) {
+        combined.set(new Uint8Array(buf), offset);
+        offset += buf.byteLength;
+      }
+
+      return new Blob([combined], { type: "application/octet-stream" });
     }
 
     var cachedMasterBlob = null;
@@ -401,40 +335,49 @@
         cachedMasterBlob = await getFile('master.dat');
         cachedCritterBlob = await getFile('critter.dat');
 
-        if (cachedMasterBlob && cachedCritterBlob) {
-          statusText.innerHTML = "SYSTEM READY.<br>MASTER.DAT (" + (cachedMasterBlob.size / 1024 / 1024).toFixed(1) + " MB) and CRITTER.DAT (" + (cachedCritterBlob.size / 1024 / 1024).toFixed(1) + " MB) loaded from local databanks.<br><span style='color:yellow'>Pre-extracting assets to memory...</span>";
+        if (!cachedMasterBlob || !cachedCritterBlob) {
+          uploadProgress.style.display = 'block';
           
-          launchBtn.style.display = 'block';
-          launchBtn.disabled = true;
-          launchBtn.innerText = 'Extracting... (Wait)';
-          resetBtn.style.display = 'block';
-          uploadZone.style.display = 'none';
+          if (!cachedMasterBlob) {
+            cachedMasterBlob = await downloadAndAssemble('master.dat', 17, 0, 70);
+            await saveFile('master.dat', cachedMasterBlob);
+          }
 
-          // PRE-EXTRACT huge blobs to ArrayBuffers in the background!
-          // This entirely removes the 5-second delay from the Launch button!
-          const [mBuf, cBuf] = await Promise.all([
-            cachedMasterBlob.arrayBuffer(),
-            cachedCritterBlob.arrayBuffer()
-          ]);
-          masterArrayBuffer = mBuf;
-          critterArrayBuffer = cBuf;
-          
-          statusText.innerHTML = "SYSTEM READY.<br>Assets successfully pre-extracted to RAM!";
-          launchBtn.innerText = 'Initialize Game Runtime';
-          launchBtn.disabled = false;
-        } else {
-          statusText.innerHTML = "WARNING: Game databanks missing.<br>Please select or drag & drop MASTER.DAT and CRITTER.DAT from your local GOG or Steam installation folder to compile.";
-          launchBtn.style.display = 'none';
-          resetBtn.style.display = 'none';
-          uploadZone.style.display = 'block';
+          if (!cachedCritterBlob) {
+            cachedCritterBlob = await downloadAndAssemble('critter.dat', 9, 71, 100);
+            await saveFile('critter.dat', cachedCritterBlob);
+          }
         }
+
+        uploadProgressBar.style.width = '100%';
+        statusText.innerHTML = "SYSTEM READY.<br>MASTER.DAT (" + (cachedMasterBlob.size / 1024 / 1024).toFixed(1) + " MB) and CRITTER.DAT (" + (cachedCritterBlob.size / 1024 / 1024).toFixed(1) + " MB) stored in IndexedDB.<br><span style='color:yellow'>Pre-extracting assets to RAM...</span>";
+        
+        launchBtn.style.display = 'block';
+        launchBtn.disabled = true;
+        launchBtn.innerText = 'Extracting... (Wait)';
+        resetBtn.style.display = 'block';
+
+        const [mBuf, cBuf] = await Promise.all([
+          cachedMasterBlob.arrayBuffer(),
+          cachedCritterBlob.arrayBuffer()
+        ]);
+        masterArrayBuffer = mBuf;
+        critterArrayBuffer = cBuf;
+        
+        statusText.innerHTML = "SYSTEM READY.<br>Assets successfully pre-extracted to RAM!";
+        launchBtn.innerText = 'Initialize Game Runtime';
+        launchBtn.disabled = false;
+        setTimeout(() => { uploadProgress.style.display = 'none'; }, 600);
+
       } catch (err) {
         console.error(err);
+        uploadProgress.style.display = 'none';
+        statusText.innerHTML = "<span style='color:red;'>Initialization Error: " + err.message + "</span>";
       }
     }
 
     async function resetFiles() {
-      if (confirm('Clear stored MASTER.DAT and CRITTER.DAT from your browser storage?')) {
+      if (confirm('Clear stored MASTER.DAT and CRITTER.DAT from browser storage?')) {
         try {
           const db = await openDB();
           const transaction = db.transaction(STORE_NAME, 'readwrite');
@@ -451,17 +394,14 @@
       }
     }
 
-    // Run check on load
     checkFiles();
 
-    // ─── Emscripten Game Module ───
     var Module = {
       canvas: (function() {
         canvasEl.addEventListener("webglcontextlost", function(e) { 
-          alert('WebGL context lost. You will need to reload the page.'); 
+          alert('WebGL context lost. Reloading page required.'); 
           e.preventDefault(); 
         }, false);
-        // Attempt to restore context automatically
         canvasEl.addEventListener("webglcontextrestored", function() {
           console.log('WebGL context restored.');
         }, false);
@@ -469,12 +409,10 @@
       })(),
       print: function(text) { if (typeof console !== 'undefined') console.log(text); },
       printErr: function(text) { if (typeof console !== 'undefined') console.error(text); },
-      // Emscripten memory optimization: request 256MB initial, 512MB max
       INITIAL_MEMORY: 268435456,
       MAXIMUM_MEMORY: 536870912,
       mouseState: {dx: 0, dy: 0, lb: 0, rb: 0},
       preRun: [function() {
-        // Pause WASM initialization until ArrayBuffers are ready
         Module.addRunDependency('load_dat');
         
         var checkInterval = setInterval(function() {
@@ -499,7 +437,7 @@
             try { FS.mkdir('sound'); FS.mkdir('sound/music'); FS.mkdir('sound/sfx'); } catch(e) {}
             
             FS.syncfs(true, function(err) {
-              Module.removeRunDependency('load_dat'); // Resume WASM initialization
+              Module.removeRunDependency('load_dat');
             });
           }
         }, 100);
@@ -510,7 +448,6 @@
       }
     };
     
-    // Sync flags for orchestrated boot
     window.cinematicFinished = false;
     window.engineReady = false;
     function checkBoot() {
@@ -521,11 +458,7 @@
       }
     }
 
-     // ─── Optimized Mouse Input (Absolute to Relative Coordinates) ───
-     // Maps the absolute system pointer coordinates to the game's internal 640x480 resolution.
-     // To ensure perfect alignment with OS cursor tracking utilities, we inject precise 
-     // coordinate deltas into the engine runtime rather than relying solely on raw pointer movement deltas.
-    var virtualX = 320; // Game cursor boots at center of 640x480
+    var virtualX = 320;
     var virtualY = 240;
     
     document.addEventListener('mousemove', function(e) {
@@ -533,17 +466,14 @@
       var rect = canvasEl.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0) return;
 
-      // Calculate absolute OS cursor mapped to game 640x480 space
       var normX = (e.clientX - rect.left) / rect.width;
       var normY = (e.clientY - rect.top) / rect.height;
       var targetX = Math.round(normX * 640);
       var targetY = Math.round(normY * 480);
       
-      // Clamp to game bounds so virtualX never drifts from internal engine bounds
       targetX = Math.max(0, Math.min(639, targetX));
       targetY = Math.max(0, Math.min(479, targetY));
 
-      // Inject the exact delta required to snap the game cursor to the OS cursor
       Module.mouseState.dx += (targetX - virtualX);
       Module.mouseState.dy += (targetY - virtualY);
       
@@ -561,14 +491,6 @@
       if (e.button === 2) Module.mouseState.rb = 0;
     }, { passive: true });
 
-    // ─── Pointer Lock for smoother in-game mouse ───
-    function requestPointerLock() {
-      if (canvasEl.requestPointerLock) {
-        canvasEl.requestPointerLock();
-      }
-    }
-
-    // ─── Fullscreen ───
     function goFullscreen() {
       var el = document.documentElement;
       var rfs = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
@@ -594,7 +516,6 @@
     document.addEventListener('fullscreenchange', onFsChange);
     document.addEventListener('webkitfullscreenchange', onFsChange);
 
-    // ─── Debounced Canvas Resize (avoids layout thrashing) ───
     let _resizeTimer = null;
     function resizeCanvas() {
       if (!canvasEl || !canvasEl.width) return;
@@ -610,18 +531,15 @@
       _resizeTimer = requestAnimationFrame(resizeCanvas);
     });
 
-    // ─── Keyboard handlers (Set for capture) ───
     const BLOCKED_CTRL_KEYS = new Set(['s','o','p','w','n','t','f','g','h','l','d','u','j','k']);
 
     document.addEventListener('keydown', function(e) {
       if (!gameStarted) return;
 
-      // Block browser Ctrl+Key shortcuts
       if (e.ctrlKey && BLOCKED_CTRL_KEYS.has(e.key.toLowerCase())) {
         e.preventDefault();
         return;
       }
-      // F11 fullscreen toggle
       if (e.key === 'F11') {
         e.preventDefault();
         if (isFullscreen()) {
@@ -632,14 +550,12 @@
         }
         return;
       }
-      // Block Tab and body Backspace
       if (e.key === 'Tab') e.preventDefault();
       if (e.key === 'Backspace' && e.target === document.body) e.preventDefault();
     }, { capture: true });
 
     document.addEventListener('contextmenu', function(e) { e.preventDefault(); });
 
-    // Prevent scroll/zoom gestures on the canvas
     canvasEl.addEventListener('wheel', function(e) { 
       if (gameStarted) e.preventDefault(); 
     }, { passive: false });
@@ -648,10 +564,8 @@
       if (gameStarted) e.preventDefault();
     }, { passive: false });
 
-    // ─── Visibility API: pause audio context when tab is hidden ───
     document.addEventListener('visibilitychange', function() {
       if (!gameStarted) return;
-      // Emscripten SDL audio context
       if (typeof SDL !== 'undefined' && SDL.audioContext) {
         if (document.hidden) {
           SDL.audioContext.suspend();
@@ -661,18 +575,14 @@
       }
     });
 
-    // ─── Launch Game ───
     function launchGame() {
       if (!masterArrayBuffer || !critterArrayBuffer) return;
 
-      // Prevent double-click
       launchBtn.disabled = true;
       launchBtn.innerText = 'LAUNCHING...';
       
-      // Trigger fullscreen immediately synchronously with the user click
       goFullscreen();
 
-      // Set up auto-syncing of save games from MEMFS back to IDBFS every 5 seconds
       setInterval(function() {
         if (gameStarted && typeof FS !== 'undefined') {
           FS.syncfs(false, function(err) {});
@@ -691,13 +601,11 @@
         loadingOverlay.style.display = 'flex';
         loadingText.innerHTML = 'Initializing WASM Runtime...';
         
-        // Start downloading and compiling the WASM engine NOW
         var script = document.createElement('script');
         script.src = 'fallout2-ce.js';
         script.async = true;
         document.body.appendChild(script);
 
-        // Orchestrate loading sequence steps for the UI transition
         setTimeout(() => { loadingText.innerHTML = 'Mounting MASTER.DAT... <span style="color: #4ade80">[OK]</span>'; }, 600);
         setTimeout(() => { loadingText.innerHTML = 'Mounting CRITTER.DAT... <span style="color: #4ade80">[OK]</span>'; }, 1200);
         setTimeout(() => { loadingText.innerHTML = 'Linking Virtual Filesystem... <span style="color: #4ade80">[OK]</span>'; }, 1800);
@@ -708,7 +616,6 @@
           checkBoot();
         }, 3000);
       } else {
-        // Fallback
         var script = document.createElement('script');
         script.src = 'fallout2-ce.js';
         script.async = true;
